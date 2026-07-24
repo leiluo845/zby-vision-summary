@@ -1,0 +1,31 @@
+{
+  "tools": [
+    {
+      "name": "execute_sync",
+      "description": "执行服务端固定配置的多表同步计划。每次重新读取全部分表。任何分表读取失败时必须在写入总表前整体终止。绝不修改分表。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "get_last_sync",
+      "description": "返回当前正在执行的同步任务；没有当前任务时返回最近一次已结束的同步任务。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "get_sync_config",
+      "description": "返回服务端当前生效的固定总表、十张分表顺序和 B/C/D/E 列映射，不返回凭证。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    }
+  ]
+}

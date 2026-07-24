@@ -1,0 +1,7 @@
+# Runtime logs and generated synchronization results
+runtime/*.log
+runtime/*-dry-run.json
+runtime/sheet-sync-web-*.json
+runtime/formal-data/
+runtime/formal-test-data/
+runtime/formal-test-data-2/

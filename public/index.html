@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>钉钉多表同步</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="page">
+      <section class="hero">
+        <p class="eyebrow">Local Control Panel</p>
+        <h1>钉钉多表同步</h1>
+        <p class="subtitle">
+          汇总多张分表后统一核对，再只向总表写入。分表始终只读，不会被脚本修改。
+        </p>
+      </section>
+
+      <section class="panel">
+        <div class="panel-header">
+          <h2>当前状态</h2>
+          <button id="refreshStatusButton" class="secondary">刷新状态</button>
+        </div>
+        <div id="configSummary" class="summary-grid"></div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-header">
+          <h2>配置告警</h2>
+        </div>
+        <div id="warningList" class="job-list"></div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-header">
+          <h2>已配置分表</h2>
+        </div>
+        <div id="jobList" class="job-list"></div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-header">
+          <h2>执行操作</h2>
+          <div id="runState" class="run-state">Idle</div>
+        </div>
+        <div class="button-row">
+          <button id="dryRunButton">预览同步</button>
+          <button id="syncButton" class="danger">执行同步</button>
+        </div>
+        <p class="hint">
+          建议先预览。执行同步时只会写入已配置的总表字段，不会修改任何分表。
+        </p>
+      </section>
+
+      <section class="panel">
+        <div class="panel-header">
+          <h2>最近结果</h2>
+        </div>
+        <pre id="resultBox" class="result-box">Loading status...</pre>
+      </section>
+    </main>
+
+    <script src="/app.js"></script>
+  </body>
+</html>
