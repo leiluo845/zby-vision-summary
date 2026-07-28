@@ -823,9 +823,6 @@ class MockSheetClient {
     };
   }
 
-  async userCanEditTarget(_plan, userContext) {
-    return this.env.mockEditableUsers.includes(String(userContext.userId || ""));
-  }
 }
 
 class DwsSheetClient {
@@ -1298,9 +1295,6 @@ class DwsSheetClient {
     };
   }
 
-  async userCanEditTarget() {
-    return true;
-  }
 }
 
 function assertWriteTargetAllowed(plan, resolvedSheetId = plan.target?.sheetId) {

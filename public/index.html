@@ -3,62 +3,61 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>钉钉多表同步</title>
+    <title>视觉页面中心多表同步</title>
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
     <main class="page">
-      <section class="hero">
-        <p class="eyebrow">Local Control Panel</p>
-        <h1>钉钉多表同步</h1>
-        <p class="subtitle">
-          汇总多张分表后统一核对，再只向总表写入。分表始终只读，不会被脚本修改。
-        </p>
+      <header class="page-header">
+        <h1>视觉页面中心多表同步</h1>
+      </header>
+
+      <section class="primary-action" aria-label="同步操作">
+        <button id="syncButton" class="sync-button" type="button">同步</button>
       </section>
 
-      <section class="panel">
-        <div class="panel-header">
-          <h2>当前状态</h2>
-          <button id="refreshStatusButton" class="secondary">刷新状态</button>
-        </div>
-        <div id="configSummary" class="summary-grid"></div>
+      <section class="status-panel" aria-labelledby="statusTitle">
+        <h2 id="statusTitle">最近一次同步情况</h2>
+        <div
+          id="resultBox"
+          class="status-text"
+          role="status"
+          aria-live="polite"
+          aria-busy="false"
+        >正在读取最近一次同步情况...</div>
+        <progress id="progressBar" class="progress-bar" max="100" value="0" hidden></progress>
       </section>
 
-      <section class="panel">
-        <div class="panel-header">
-          <h2>配置告警</h2>
-        </div>
-        <div id="warningList" class="job-list"></div>
-      </section>
-
-      <section class="panel">
-        <div class="panel-header">
-          <h2>已配置分表</h2>
-        </div>
-        <div id="jobList" class="job-list"></div>
-      </section>
-
-      <section class="panel">
-        <div class="panel-header">
-          <h2>执行操作</h2>
-          <div id="runState" class="run-state">Idle</div>
-        </div>
-        <div class="button-row">
-          <button id="dryRunButton">预览同步</button>
-          <button id="syncButton" class="danger">执行同步</button>
-        </div>
-        <p class="hint">
-          建议先预览。执行同步时只会写入已配置的总表字段，不会修改任何分表。
-        </p>
-      </section>
-
-      <section class="panel">
-        <div class="panel-header">
-          <h2>最近结果</h2>
-        </div>
-        <pre id="resultBox" class="result-box">Loading status...</pre>
-      </section>
+      <button id="configButton" class="config-button" type="button">配置和规则</button>
     </main>
+
+    <dialog id="configDialog" class="config-dialog" aria-labelledby="configTitle">
+      <div class="dialog-header">
+        <h2 id="configTitle">配置和规则</h2>
+        <button
+          id="closeConfigButton"
+          class="close-button"
+          type="button"
+          aria-label="关闭"
+          title="关闭"
+        >&times;</button>
+      </div>
+      <div id="configContent" class="dialog-content">正在读取配置...</div>
+    </dialog>
+
+    <dialog id="conflictDialog" class="config-dialog conflict-dialog" aria-labelledby="conflictTitle">
+      <div class="dialog-header">
+        <h2 id="conflictTitle">冲突货号</h2>
+        <button
+          id="closeConflictButton"
+          class="close-button"
+          type="button"
+          aria-label="关闭冲突货号"
+          title="关闭"
+        >&times;</button>
+      </div>
+      <div id="conflictContent" class="dialog-content"></div>
+    </dialog>
 
     <script src="/app.js"></script>
   </body>

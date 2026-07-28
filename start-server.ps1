@@ -1,6 +1,6 @@
 $ErrorActionPreference = "Stop"
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-Set-Location (Resolve-Path (Join-Path $scriptDir "..\.."))
+Set-Location $scriptDir
 
-node (Join-Path $scriptDir "server.js")
+node .\server.js

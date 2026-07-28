@@ -5,19 +5,6 @@ const DEFAULT_SYNC_FIELDS = [
   "视频完成时间",
 ];
 const DEFAULT_PLACEHOLDER_VALUES = ["/"];
-const DEFAULT_COLUMN_MAPPING = {
-  "齐色主附图完成时间": "齐色主附图完成时间",
-  "A+完成时间": "A+完成日期",
-  "视频完成时间": "视频完成日期",
-};
-const DEFAULT_HEADER_ALIASES = {
-  [DEFAULT_KEY_COLUMN]: [DEFAULT_KEY_COLUMN],
-  "齐色主附图完成时间": ["齐色主附图完成时间", "齐色主附图完成日期"],
-  "A+完成时间": ["A+完成时间", "A+完成日期"],
-  "A+完成日期": ["A+完成日期", "A+完成时间"],
-  "视频完成时间": ["视频完成时间", "视频完成日期"],
-  "视频完成日期": ["视频完成日期", "视频完成时间"],
-};
 
 function assert(condition, message) {
   if (!condition) {
@@ -33,24 +20,8 @@ function unique(values) {
   return [...new Set(values.filter(Boolean).map((value) => String(value).trim()))];
 }
 
-function normalizeRules(input = {}) {
-  const keyColumn = String(input.keyColumn || DEFAULT_KEY_COLUMN).trim();
-  const columnMapping = Object.keys(input.columnMapping || {}).length > 0
-    ? { ...input.columnMapping }
-    : { ...DEFAULT_COLUMN_MAPPING };
-  const headerAliases = buildHeaderAliases(keyColumn, columnMapping, input.headerAliases || {});
-
-  return {
-    keyColumn,
-    columnMapping,
-    headerAliases,
-    allowEmptyOverwrite: Boolean(input.allowEmptyOverwrite),
-    maxPreview: Number.isFinite(Number(input.maxPreview)) ? Number(input.maxPreview) : 20,
-  };
-}
-
 function buildHeaderAliases(keyColumn, columnMapping, customAliases) {
-  const merged = { ...DEFAULT_HEADER_ALIASES, ...customAliases };
+  const merged = { ...customAliases };
   merged[keyColumn] = unique([keyColumn, ...(merged[keyColumn] || [])]);
 
   for (const [sourceColumn, targetColumn] of Object.entries(columnMapping)) {
@@ -152,31 +123,6 @@ function normalizeHeader(value) {
 
 function normalizeKey(value) {
   return String(value ?? "").trim();
-}
-
-function normalizeComparable(value) {
-  return String(value ?? "").trim();
-}
-
-function normalizeKeyForDiagnostics(value) {
-  const text = String(value ?? "").normalize("NFKC").trim().toUpperCase();
-  if (!text) {
-    return "";
-  }
-
-  return text
-    .replace(/\s+/g, "")
-    .replace(/[([][^)\]]*[)\]]/g, "")
-    .replace(/[（［【].*[）］】]/g, "")
-    .trim();
-}
-
-function isBlank(value) {
-  return normalizeComparable(value) === "";
-}
-
-function sampleList(values, limit) {
-  return values.slice(0, Math.max(1, limit));
 }
 
 function ensureRowWidth(row, width) {
@@ -287,247 +233,6 @@ function buildRecordIndex(rows, headerInfo, requiredHeaders, keyColumn) {
   };
 }
 
-function buildNormalizedKeyMap(keys) {
-  const map = new Map();
-
-  for (const rawKey of keys) {
-    const normalized = normalizeKeyForDiagnostics(rawKey);
-    if (!normalized) {
-      continue;
-    }
-
-    if (!map.has(normalized)) {
-      map.set(normalized, new Set());
-    }
-
-    map.get(normalized).add(rawKey);
-  }
-
-  return map;
-}
-
-function buildTransformedKeySamples(keys, limit) {
-  const transformed = [];
-
-  for (const rawKey of keys) {
-    const normalized = normalizeKeyForDiagnostics(rawKey);
-    if (!normalized || normalized === rawKey) {
-      continue;
-    }
-
-    transformed.push({ raw: rawKey, normalized });
-    if (transformed.length >= limit) {
-      break;
-    }
-  }
-
-  return transformed;
-}
-
-function buildKeyDiagnostics(sourceRecords, targetRecords, maxPreview) {
-  const limit = Math.max(5, Math.min(maxPreview || 20, 20));
-  const sourceKeys = sourceRecords.keys;
-  const targetKeys = targetRecords.keys;
-  const sourceNormalizedMap = buildNormalizedKeyMap(sourceKeys);
-  const targetNormalizedMap = buildNormalizedKeyMap(targetKeys);
-  const exactOverlap = sourceKeys.filter((key) => targetRecords.index.has(key));
-  const normalizedOverlap = [...sourceNormalizedMap.keys()].filter((key) => targetNormalizedMap.has(key));
-  const normalizedOnlyOverlap = normalizedOverlap.filter((normalized) => {
-    const sourceRawKeys = [...sourceNormalizedMap.get(normalized)];
-    const targetRawKeys = [...targetNormalizedMap.get(normalized)];
-    return !sourceRawKeys.some((sourceRawKey) => targetRawKeys.includes(sourceRawKey));
-  });
-
-  return {
-    sourceKeySamples: sampleList(sourceKeys, limit),
-    targetKeySamples: sampleList(targetKeys, limit),
-    exactOverlapCount: exactOverlap.length,
-    exactOverlapSample: sampleList(exactOverlap, limit),
-    normalized: {
-      overlapCount: normalizedOverlap.length,
-      overlapSample: sampleList(normalizedOverlap, limit),
-      normalizedOnlyOverlapCount: normalizedOnlyOverlap.length,
-      normalizedOnlyOverlapSample: sampleList(normalizedOnlyOverlap, limit).map((normalized) => ({
-        normalized,
-        source: sampleList([...sourceNormalizedMap.get(normalized)], 3),
-        target: sampleList([...targetNormalizedMap.get(normalized)], 3),
-      })),
-      sourceTransformedSample: buildTransformedKeySamples(sourceKeys, limit),
-      targetTransformedSample: buildTransformedKeySamples(targetKeys, limit),
-    },
-  };
-}
-
-function buildSyncResult(sourceRowsInput, targetRowsInput, rulesInput = {}, options = {}) {
-  const rules = normalizeRules({ ...rulesInput, maxPreview: options.maxPreview ?? rulesInput.maxPreview });
-  const keyColumn = rules.keyColumn;
-  const sourceHeaders = [keyColumn, ...Object.keys(rules.columnMapping)];
-  const targetHeaders = [keyColumn, ...Object.values(rules.columnMapping)];
-  const sourceRows = cloneRows(sourceRowsInput);
-  const targetRows = cloneRows(targetRowsInput);
-  const sourceHeaderInfo = findHeaderRow(sourceRows, sourceHeaders, rules);
-  const targetHeaderInfo = findHeaderRow(targetRows, targetHeaders, rules);
-  const sourceRecords = buildRecordIndex(sourceRows, sourceHeaderInfo, sourceHeaders, keyColumn);
-  const targetRecords = buildRecordIndex(targetRows, targetHeaderInfo, targetHeaders, keyColumn);
-  const updatedTargetRows = cloneRows(targetRows);
-  const sourceHeaderDiagnostics = buildHeaderDiagnostics(sourceRows, sourceHeaderInfo, keyColumn);
-  const targetHeaderDiagnostics = buildHeaderDiagnostics(targetRows, targetHeaderInfo, keyColumn);
-
-  const ambiguousKeys = new Set([...targetRecords.duplicateKeys]);
-  const missingInTarget = [];
-  const missingInSource = [];
-  const changes = [];
-  const rowChangeMap = new Map();
-  const affectedKeys = new Set();
-  let matchedKeys = 0;
-
-  for (const [key, sourceRecord] of sourceRecords.index.entries()) {
-    if (ambiguousKeys.has(key)) {
-      continue;
-    }
-
-    const targetRecord = targetRecords.index.get(key);
-    if (!targetRecord) {
-      missingInTarget.push(key);
-      continue;
-    }
-
-    matchedKeys += 1;
-
-    for (const [sourceColumn, targetColumn] of Object.entries(rules.columnMapping)) {
-      const sourceValue = sourceRecord.values[sourceColumn] ?? "";
-      const targetValue = targetRecord.values[targetColumn] ?? "";
-
-      if (!rules.allowEmptyOverwrite && isBlank(sourceValue)) {
-        continue;
-      }
-
-      if (normalizeComparable(sourceValue) === normalizeComparable(targetValue)) {
-        continue;
-      }
-
-      const targetColumnIndex = targetHeaderInfo.columnIndexByHeader[targetColumn];
-      ensureRowWidth(updatedTargetRows[targetRecord.rowIndex], targetColumnIndex + 1);
-      updatedTargetRows[targetRecord.rowIndex][targetColumnIndex] = sourceValue;
-      affectedKeys.add(key);
-      changes.push({
-        key,
-        column: targetColumn,
-        oldValue: targetValue,
-        newValue: sourceValue,
-        targetRow: targetRecord.rowIndex + 1,
-        targetColumnLetter: excelColumnName(targetColumnIndex),
-      });
-
-      if (!rowChangeMap.has(targetRecord.rowIndex)) {
-        rowChangeMap.set(targetRecord.rowIndex, new Set());
-      }
-      rowChangeMap.get(targetRecord.rowIndex).add(targetColumnIndex);
-    }
-  }
-
-  for (const key of targetRecords.index.keys()) {
-    if (!sourceRecords.index.has(key) && !ambiguousKeys.has(key)) {
-      missingInSource.push(key);
-    }
-  }
-
-  return {
-    sourceHeaderInfo,
-    targetHeaderInfo,
-    sourceRecords,
-    targetRecords,
-    updatedTargetRows,
-    changes,
-    rowChangeMap,
-    report: {
-      dryRun: Boolean(options.dryRun),
-      allowEmptyOverwrite: rules.allowEmptyOverwrite,
-      headerRows: {
-        source: sourceHeaderInfo.rowIndex + 1,
-        target: targetHeaderInfo.rowIndex + 1,
-      },
-      headerDiagnostics: {
-        source: sourceHeaderDiagnostics,
-        target: targetHeaderDiagnostics,
-      },
-      stats: {
-        sourceRecords: sourceRecords.recordCount,
-        targetRecords: targetRecords.recordCount,
-        matchedKeys,
-        affectedKeys: affectedKeys.size,
-        changedCells: changes.length,
-        changedRows: rowChangeMap.size,
-        missingInTarget: missingInTarget.length,
-        missingInSource: missingInSource.length,
-        duplicateKeysInSource: sourceRecords.duplicateKeys.length,
-        duplicateKeysInTarget: targetRecords.duplicateKeys.length,
-      },
-      duplicateKeys: {
-        source: sourceRecords.duplicateKeys,
-        target: targetRecords.duplicateKeys,
-      },
-      keyDiagnostics: buildKeyDiagnostics(sourceRecords, targetRecords, rules.maxPreview),
-      missingKeys: {
-        inTarget: missingInTarget,
-        inSource: missingInSource,
-      },
-      previewChanges: changes.slice(0, rules.maxPreview),
-    },
-  };
-}
-
-function detectBlankRisk(sourceRowsInput, rulesInput = {}, options = {}) {
-  const rules = normalizeRules(rulesInput);
-  const keyColumn = rules.keyColumn;
-  const sourceHeaders = [keyColumn, ...Object.keys(rules.columnMapping)];
-  const sourceRows = cloneRows(sourceRowsInput);
-  const sourceHeaderInfo = findHeaderRow(sourceRows, sourceHeaders, rules);
-  const keyColumnIndex = sourceHeaderInfo.columnIndexByHeader[keyColumn];
-  const sampleLimit = Number.isFinite(Number(options.sampleLimit)) ? Number(options.sampleLimit) : 10;
-  const columnCounts = new Map();
-  const samples = [];
-  let blankCellCount = 0;
-  let sourceRecordCount = 0;
-
-  for (let rowIndex = sourceHeaderInfo.rowIndex + 1; rowIndex < sourceRows.length; rowIndex += 1) {
-    const row = sourceRows[rowIndex];
-    const key = normalizeKey(row[keyColumnIndex]);
-    if (!key) {
-      continue;
-    }
-
-    sourceRecordCount += 1;
-
-    for (const sourceColumn of Object.keys(rules.columnMapping)) {
-      const columnIndex = sourceHeaderInfo.columnIndexByHeader[sourceColumn];
-      const value = row[columnIndex] ?? "";
-      if (!isBlank(value)) {
-        continue;
-      }
-
-      blankCellCount += 1;
-      columnCounts.set(sourceColumn, (columnCounts.get(sourceColumn) || 0) + 1);
-      if (samples.length < sampleLimit) {
-        samples.push({
-          key,
-          column: sourceColumn,
-          row: rowIndex + 1,
-        });
-      }
-    }
-  }
-
-  return {
-    hasBlankCells: blankCellCount > 0,
-    requiresConfirmation: blankCellCount > 0 && rules.allowEmptyOverwrite,
-    blankCellCount,
-    sourceRecordCount,
-    columns: [...columnCounts.entries()].map(([column, count]) => ({ column, count })),
-    samples,
-  };
-}
-
 function normalizeCompactRules(input = {}) {
   const nestedRules = input.rules || {};
   const keyColumn = String(nestedRules.keyColumn || input.keyColumn || DEFAULT_KEY_COLUMN).trim();
@@ -551,7 +256,6 @@ function normalizeCompactRules(input = {}) {
     keyColumn,
     fields: fields.length > 0 ? fields : [...DEFAULT_SYNC_FIELDS],
     placeholderValues,
-    allowEmptyOverwrite: Boolean(nestedRules.allowEmptyOverwrite ?? input.allowEmptyOverwrite),
     maxPreview: Number.isFinite(Number(input.maxPreview || nestedRules.maxPreview))
       ? Number(input.maxPreview || nestedRules.maxPreview)
       : 20,
@@ -589,41 +293,6 @@ function getJobFieldSpec(job, field) {
 function normalizePlaceholder(value, rules) {
   const text = String(value ?? "").trim();
   return rules.placeholderValues.includes(text) ? text : null;
-}
-
-function normalizeDateLikeValue(value) {
-  const text = String(value ?? "").trim();
-  if (!text) {
-    return "";
-  }
-
-  const normalized = text
-    .replace(/[年月]/g, "-")
-    .replace(/日/g, "")
-    .replace(/[/.]/g, "-")
-    .replace(/\s+/g, " ");
-  const match = normalized.match(/^(\d{4})-(\d{1,2})-(\d{1,2})(?:\s+.*)?$/);
-  if (!match) {
-    return text;
-  }
-
-  const year = match[1];
-  const month = String(Number(match[2])).padStart(2, "0");
-  const day = String(Number(match[3])).padStart(2, "0");
-  return `${year}-${month}-${day}`;
-}
-
-function isNormalizedDateText(value) {
-  return /^\d{4}-\d{2}-\d{2}$/.test(String(value || ""));
-}
-
-function isZeroDateLikeValue(normalizedDate) {
-  if (!isNormalizedDateText(normalizedDate)) {
-    return false;
-  }
-
-  const year = Number(String(normalizedDate).slice(0, 4));
-  return year <= 1900;
 }
 
 function classifySyncValue(value, rules) {
@@ -687,10 +356,6 @@ function buildSourceContribution(job, sourceRecord, field, rules) {
     : fieldSpec.constant;
   const classified = classifySyncValue(rawValue, rules);
 
-  if (classified.kind === "blank") {
-    return null;
-  }
-
   return {
     jobId: job.id,
     jobLabel: job.label,
@@ -699,6 +364,7 @@ function buildSourceContribution(job, sourceRecord, field, rules) {
     rawValue: classified.rawValue,
     kind: classified.kind,
     normalized: classified.normalized,
+    comparable: normalizeComparableSyncValue(rawValue, rules),
   };
 }
 
@@ -784,15 +450,13 @@ function buildAggregatedSyncResult(targetRowsInput, sourceJobsInput, planInput =
 
         for (const field of fields) {
           const contribution = buildSourceContribution(job, sourceRecord, field, rules);
-          if (!contribution) {
-            continue;
-          }
 
           let fieldState = keyState.fieldStates.get(field);
           if (!fieldState) {
             fieldState = {
               chosen: null,
-              actualContributions: new Map(),
+              contributions: [],
+              contributionsByValue: new Map(),
             };
             keyState.fieldStates.set(field, fieldState);
           }
@@ -801,8 +465,10 @@ function buildAggregatedSyncResult(targetRowsInput, sourceJobsInput, planInput =
             fieldState.chosen = contribution;
           }
 
-          if (contribution.kind === "actual" && !fieldState.actualContributions.has(contribution.normalized)) {
-            fieldState.actualContributions.set(contribution.normalized, contribution);
+          fieldState.contributions.push(contribution);
+
+          if (!fieldState.contributionsByValue.has(contribution.comparable)) {
+            fieldState.contributionsByValue.set(contribution.comparable, contribution);
           }
         }
       }
@@ -830,15 +496,15 @@ function buildAggregatedSyncResult(targetRowsInput, sourceJobsInput, planInput =
 
   for (const [key, keyState] of keyStates.entries()) {
     for (const [field, fieldState] of keyState.fieldStates.entries()) {
-      if (fieldState.actualContributions.size <= 1) {
+      if (fieldState.contributionsByValue.size <= 1) {
         continue;
       }
 
       addFailureReason(failureMap, key, {
         type: "conflict",
         field,
-        message: "同一货号在多个分表中提供了不同的非空日期，已跳过该货号。",
-        sources: [...fieldState.actualContributions.values()].map((contribution) => ({
+        message: "同一货号在多个分表中提供了不同的值（包括空值），已跳过该货号。",
+        sources: fieldState.contributions.map((contribution) => ({
           jobId: contribution.jobId,
           jobLabel: contribution.jobLabel,
           row: contribution.sourceRow,
@@ -860,11 +526,14 @@ function buildAggregatedSyncResult(targetRowsInput, sourceJobsInput, planInput =
 
     const pendingChanges = [];
     const keyState = keyStates.get(key);
+    if (!keyState) {
+      continue;
+    }
 
     for (const field of fields) {
-      const chosen = keyState?.fieldStates.get(field)?.chosen;
+      const chosen = keyState.fieldStates.get(field)?.chosen;
       const currentValue = targetRecord?.values[field] ?? "";
-      const desiredValue = chosen ? chosen.rawValue : "";
+      const desiredValue = chosen.rawValue;
 
       if (normalizeComparableSyncValue(desiredValue, rules) !== normalizeComparableSyncValue(currentValue, rules)) {
         pendingChanges.push({
@@ -966,19 +635,14 @@ function buildAggregatedSyncResult(targetRowsInput, sourceJobsInput, planInput =
 }
 
 module.exports = {
-  DEFAULT_COLUMN_MAPPING,
   DEFAULT_KEY_COLUMN,
   DEFAULT_SYNC_FIELDS,
   assert,
   buildAggregatedSyncResult,
-  buildSyncResult,
   cloneRows,
-  detectBlankRisk,
   detectDelimiter,
   excelColumnName,
   findHeaderRow,
-  isBlank,
-  normalizeRules,
   parseCsv,
   writeCsv,
 };

@@ -2,7 +2,6 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const {
   buildAggregatedSyncResult,
-  detectBlankRisk,
 } = require("../src/sync/core");
 const {
   DwsSheetClient,
@@ -22,7 +21,6 @@ function createPlan(overrides = {}) {
     rules: {
       keyColumn: "货号",
       fields: ["齐色主附图完成时间", "A+完成时间", "视频完成时间"],
-      allowEmptyOverwrite: false,
       placeholderValues: ["/"],
       ...(overrides.rules || {}),
     },
@@ -148,6 +146,17 @@ test("buildAggregatedSyncResult marks conflicting non-empty dates across sheets 
         ["SKU-1", "2026-07-09", "", ""],
       ],
     },
+    {
+      job: {
+        id: "job-3",
+        label: "分表三",
+        fields: {},
+      },
+      rows: [
+        ["货号", "齐色主附图完成时间", "A+完成时间", "视频完成时间"],
+        ["SKU-1", "2026-07-01", "", ""],
+      ],
+    },
   ];
 
   const result = buildAggregatedSyncResult(targetRows, sourceJobs, plan, { dryRun: true });
@@ -162,24 +171,9 @@ test("buildAggregatedSyncResult marks conflicting non-empty dates across sheets 
     [
       { jobLabel: "分表一", row: 2, value: "2026-07-01" },
       { jobLabel: "分表二", row: 2, value: "2026-07-09" },
+      { jobLabel: "分表三", row: 2, value: "2026-07-01" },
     ],
   );
-});
-
-test("detectBlankRisk still reports empty source cells when empty overwrite is enabled", () => {
-  const sourceRows = [
-    ["货号", "齐色主附图完成时间", "A+完成时间", "视频完成时间"],
-    ["SKU-1", "2026-07-01", "2026-07-02", ""],
-    ["SKU-2", "", "2026-07-03", "2026-07-04"],
-  ];
-
-  const risk = detectBlankRisk(sourceRows, {
-    allowEmptyOverwrite: true,
-  });
-
-  assert.equal(risk.hasBlankCells, true);
-  assert.equal(risk.requiresConfirmation, true);
-  assert.equal(risk.blankCellCount, 2);
 });
 
 test("assertWriteTargetAllowed blocks writes outside the master allowlist", () => {
@@ -231,10 +225,10 @@ test("buildChangedBlocks splits separated row writes into smaller csv-put blocks
   assert.equal(blocks[1].startCell, "B4");
 });
 
-test("buildChangedBlockCsv keeps target values aligned with configured target columns", () => {
+test("buildChangedBlockCsv keeps explicit blank values aligned with target columns", () => {
   const updatedTargetRows = [
     ["货号", "齐色主附图完成时间", "A+完成时间", "视频完成时间"],
-    ["SKU-1", "2026-07-01", "2026-07-02", "2026-07-03"],
+    ["SKU-1", "2026-07-01", "", "2026-07-03"],
   ];
   const rowWrites = [{ rowIndex: 1 }];
   const targetColumns = {
@@ -252,7 +246,7 @@ test("buildChangedBlockCsv keeps target values aligned with configured target co
 
   assert.equal(block.startCell, "C2");
   assert.equal(block.range, "C2:E2");
-  assert.equal(block.csv, "2026-07-01,2026-07-02,2026-07-03");
+  assert.equal(block.csv, "2026-07-01,,2026-07-03");
 });
 
 test("single-row timeout fallback narrows writes to the target row and changed fields", () => {
@@ -266,6 +260,7 @@ test("single-row timeout fallback narrows writes to the target row and changed f
     },
     changes: [
       { field: "fieldA", newValue: "2026-07-01" },
+      { field: "fieldB", newValue: "" },
       { field: "fieldC", newValue: "2026-07-03" },
     ],
   };
@@ -291,6 +286,7 @@ test("single-row timeout fallback narrows writes to the target row and changed f
     cellWrites.map((item) => ({ field: item.field, cell: item.startCell, value: item.values[0][0].text })),
     [
       { field: "fieldA", cell: "B2", value: "2026-07-01" },
+      { field: "fieldB", cell: "C2", value: "" },
       { field: "fieldC", cell: "D2", value: "2026-07-03" },
     ],
   );
@@ -324,13 +320,14 @@ test("buildAggregatedSyncResult reports actual configured target column letters"
   );
 });
 
-test("buildAggregatedSyncResult copies raw source values and clears stale target cells", () => {
+test("buildAggregatedSyncResult copies source values including blanks and leaves absent SKUs unchanged", () => {
   const plan = createPlan();
   const headers = [plan.rules.keyColumn, ...plan.rules.fields];
   const targetRows = [
     headers,
     ["SKU-1", "old-a", "old-b", "old-c"],
     ["SKU-2", "keep-a", "keep-b", "keep-c"],
+    ["SKU-3", "stay-a", "stay-b", "stay-c"],
   ];
   const sourceJobs = [
     {
@@ -341,7 +338,8 @@ test("buildAggregatedSyncResult copies raw source values and clears stale target
       },
       rows: [
         headers,
-        ["SKU-1", "1899/12/30", "owner-A", "status-1"],
+        ["SKU-1", "1899/12/30", "", "/"],
+        ["SKU-2", "", "", ""],
       ],
     },
   ];
@@ -350,8 +348,31 @@ test("buildAggregatedSyncResult copies raw source values and clears stale target
 
   assert.equal(result.rowWrites.length, 2);
   assert.equal(result.changes.length, 6);
-  assert.deepEqual(result.updatedTargetRows[1], ["SKU-1", "1899/12/30", "owner-A", "status-1"]);
+  assert.deepEqual(result.updatedTargetRows[1], ["SKU-1", "1899/12/30", "", "/"]);
   assert.deepEqual(result.updatedTargetRows[2], ["SKU-2", "", "", ""]);
+  assert.deepEqual(result.updatedTargetRows[3], ["SKU-3", "stay-a", "stay-b", "stay-c"]);
+});
+
+test("buildAggregatedSyncResult treats blank and non-blank values across sheets as a conflict", () => {
+  const plan = createPlan();
+  const headers = [plan.rules.keyColumn, ...plan.rules.fields];
+  const targetRows = [headers, ["SKU-1", "old-a", "old-b", "old-c"]];
+  const sourceJobs = [
+    {
+      job: { id: "job-1", label: "sheet-1", fields: {} },
+      rows: [headers, ["SKU-1", "", "same", "same"]],
+    },
+    {
+      job: { id: "job-2", label: "sheet-2", fields: {} },
+      rows: [headers, ["SKU-1", "2026-07-01", "same", "same"]],
+    },
+  ];
+
+  const result = buildAggregatedSyncResult(targetRows, sourceJobs, plan, { dryRun: true });
+
+  assert.equal(result.report.stats.conflictedKeys, 1);
+  assert.equal(result.rowWrites.length, 0);
+  assert.deepEqual(result.updatedTargetRows[1], ["SKU-1", "old-a", "old-b", "old-c"]);
 });
 
 test("extractCsvRows preserves blank rows from csv-get payloads", () => {

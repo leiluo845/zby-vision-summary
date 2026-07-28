@@ -1,111 +1,83 @@
-# Sheet Sync Web Demo
+# 多表手动同步
 
-This is a local no-dependency web wrapper around the existing DingTalk sheet sync script.
+这是一个通过浏览器手动操作的多表同步工具。服务读取多张钉钉在线分表，按货号汇总三个时间字段，并写入固定总表。
 
-It now supports running multiple branch-sheet sync jobs into one master sheet from a single preview or write action.
+项目不包含定时任务，也不接入钉钉机器人。只有用户在 Web 页面点击“同步”并确认后，服务才会读取表格、计算差异并写入总表。
 
-## What it does
+## 当前配置
 
-- Serves a local page with preview and sync buttons
-- Calls `work/dingtalk-sheet-sync-demo.js` for each configured job
-- Uses your local `dws` login under `work/dws-config`
-- Shows DWS auth status, configured jobs, aggregate sync summary, and per-job results
+同步计划位于 `src/config/sync-plans.json`：
 
-## Files
+- 计划 ID：`daily_master_sync`
+- 来源：10 张分表的“完成情况”工作表
+- 目标：固定总表 `Sheet1`
+- 匹配字段：货号，分表和总表均为 B 列
+- 同步字段：
+  - C 列：齐色主附图完成时间
+  - D 列：A+完成时间
+  - E 列：视频完成时间
 
-- `server.js`: local HTTP server and multi-job orchestrator
-- `sync-config.json`: sync configuration
-- `public/`: local control panel
-- `start-server.ps1`: local startup script
+## 同步规则
 
-## Start
+1. 分表中存在某个货号时，该行的三个时间字段会原样同步到总表。
+2. 空白也是有效值。分表字段为空时，对应总表字段会被清空。
+3. `/` 等非空文本会按原值写入，不做日期转换。
+4. 某货号未出现在任何分表中时，总表该货号保持不变。
+5. 分表有货号但总表没有时，不新增总表行，只记录失败。
+6. 同一货号在不同分表中出现不同字段值时，包括空白与非空的差异，该货号按冲突跳过。
+7. 总表存在重复货号时，该货号跳过，避免写错行。
+8. 分表内部货号重复时使用第一条记录，并在结果中显示重复数量。
 
-From the workspace root:
+## 启动
+
+要求 Node.js 18 或更高版本，并确保本机已安装和登录 `dws`。
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\work\sheet-sync-web\start-server.ps1
+$env:DINGTALK_PROVIDER = "dws"
+$env:DWS_CONFIG_DIR = "..\dws-config"
+node .\server.js
 ```
 
-Or:
-
-```cmd
-.\work\sheet-sync-web\start-server.cmd
-```
-
-Open:
+默认打开：
 
 ```text
 http://127.0.0.1:3210/
 ```
 
-## Formal backend
-
-The repo now also contains a formal backend scaffold for the DingTalk bot production route:
-
-- `src/app.js`: formal Node backend entry
-- `src/config/sync-plans.json`: fixed 5-branch + 1-master sync plan
-- `src/sync/core.js`: extracted pure sync logic
-- `docs/production-deployment.md`: deployment and go-live notes
-
-Start it with:
+也可以运行：
 
 ```powershell
-node .\src\app.js
+npm start
 ```
 
-Or:
+环境变量示例见 `.env.example`。代码不会自动读取 `.env` 文件，需要在启动进程中设置环境变量。
+
+## Web 功能
+
+- 首页只显示“同步”按钮和最近一次同步情况
+- 同步过程中显示真实任务完成百分比
+- 最近结果显示时间、成功分表数、失败分表名称、更新行数、更新单元格数、未新增货号数、冲突货号数和耗时
+- 存在冲突时可打开明细弹窗，逐行查看冲突货号及其所在分表
+- 计划、总表、10 张分表、字段映射和规则收纳在“配置和规则”弹窗中
+- 确认后手动执行正式同步，不提供前端预览或测试按钮
+- 同一时间只允许一个同步任务运行
+
+## HTTP 接口
+
+- `GET /healthz`：健康检查
+- `GET /api/status`：当前任务进度、最近结果和页面配置
+- `GET /api/config`：当前同步配置
+- `GET /api/last-run`：最近一次运行记录
+- `POST /api/sync`：手动执行同步；前端固定发送 `{ "dryRun": false }`
+
+## 本地数据
+
+运行记录默认保存在 `runtime/formal-data/runs.json`，最多保留 20 条。表格写入前还会校验配置中的总表节点和 Sheet ID 写入护栏。
+
+## 测试
 
 ```powershell
-npm run start:formal
+npm test
 ```
 
-## Config shape
-
-The recommended config format is:
-
-```json
-{
-  "appName": "钉钉多表同步 Demo",
-  "port": 3210,
-  "targetNode": "https://alidocs.dingtalk.com/i/nodes/<总表链接>",
-  "targetSheet": "总表",
-  "allowEmptyOverwrite": true,
-  "dwsConfigDir": "..\\dws-config",
-  "syncScriptPath": "..\\dingtalk-sheet-sync-demo.js",
-  "syncJobs": [
-    {
-      "id": "branch-1",
-      "label": "分表1 -> 总表",
-      "sourceNode": "https://alidocs.dingtalk.com/i/nodes/<分表1链接>",
-      "sourceSheet": "分表1"
-    },
-    {
-      "id": "branch-2",
-      "label": "分表2 -> 总表",
-      "sourceNode": "https://alidocs.dingtalk.com/i/nodes/<分表2链接>",
-      "sourceSheet": "分表2"
-    }
-  ]
-}
-```
-
-Notes:
-
-- `targetNode` and `targetSheet` can stay at the top level when every branch sheet syncs into the same master sheet.
-- Each item in `syncJobs` can override `targetNode`, `targetSheet`, or `allowEmptyOverwrite` when needed.
-- The older single-job keys (`sourceNode`, `sourceSheet`, `targetNode`, `targetSheet`) are still supported for backward compatibility.
-
-## Current field mapping
-
-The underlying sync script still matches rows by `货号` and applies this mapping:
-
-- `齐色主附图完成时间` -> `齐色主附图完成时间`
-- `A+完成时间` -> `A+完成日期`
-- `视频完成时间` -> `视频完成日期`
-
-## Notes
-
-- If `dws auth status` shows not logged in, re-login into the account that can access every branch sheet and the master sheet.
-- Update `sync-config.json` when any DingTalk sheet link or sheet name changes.
-- `Preview All Jobs` runs every configured sync job in dry-run mode.
-- `Run All Jobs` writes back into the DingTalk online master sheet for each configured job in sequence.
+部署注意事项见 `docs/production-deployment.md`，详细规则见 `docs/manual-web-sync-design.md`。

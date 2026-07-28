@@ -2,13 +2,13 @@
   "name": "sheet-sync-web",
   "version": "1.0.0",
   "private": true,
-  "description": "Formal DingTalk bot backend for fixed multi-sheet sync.",
+  "description": "Manual web console for fixed multi-sheet sync.",
   "type": "commonjs",
   "engines": {
     "node": ">=18"
   },
   "scripts": {
-    "start:formal": "node src/app.js",
+    "start": "node server.js",
     "test": "node --test"
   }
 }

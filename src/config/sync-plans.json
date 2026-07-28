@@ -4,7 +4,6 @@
       "planId": "daily_master_sync",
       "name": "总表同步",
       "enabled": true,
-      "timezone": "Asia/Shanghai",
       "rules": {
         "keyColumn": "货号",
         "fields": [
@@ -12,7 +11,6 @@
           "A+完成时间",
           "视频完成时间"
         ],
-        "allowEmptyOverwrite": false,
         "placeholderValues": [
           "/"
         ]
@@ -225,10 +223,7 @@
               "column": "E",
               "sourceHeader": "视频完成时间"
             }
-          },
-          "auditWarnings": [
-            "这张分表我在线核对时遇到接口阻断，sheet 可读性和列位仍建议再次复核。"
-          ]
+          }
         },
         {
           "id": "sheet_09",
@@ -284,7 +279,7 @@
         },
         {
           "id": "sheet_11",
-          "label": "分表11 AOYSKY 新品流程表",
+          "label": "分表⑩ AOYSKY 新品流程表",
           "source": {
             "node": "https://alidocs.dingtalk.com/spreadsheetv2/9qy71mDVHrjW0YG5/edit?dentryKey=9qy71mDVHrjW0YG5&dd_user_keyboard=false&dd_progress=true&dt_editor_toolbar=true&sheet_range=st-55bb2b9a-60012_0_0_1_1",
             "sheet": "完成情况"
@@ -308,26 +303,7 @@
             }
           }
         }
-      ],
-      "auditWarnings": [
-        "分表⑧的在线只读核对当时被钉钉接口阻断，建议正式跑线上前再复核一次。"
-      ],
-      "schedule": {
-        "crons": [
-          "0 12 * * *",
-          "0 0 * * *"
-        ]
-      },
-      "manualTrigger": {
-        "enabled": true,
-        "permissionMode": "target_editors",
-        "permissionCacheTtlSeconds": 600,
-        "blankCellPolicy": {
-          "manual": "confirm_then_continue",
-          "scheduled": "abort_and_notify",
-          "confirmationTimeoutMinutes": 10
-        }
-      }
+      ]
     }
   ]
 }

@@ -14,34 +14,11 @@ class SyncPlanRepo {
     const parsed = JSON.parse(rawText);
     const plans = Array.isArray(parsed.plans) ? parsed.plans : [parsed];
 
-    return {
-      plans: plans.map((plan) => ({
-        manualTrigger: {
-          enabled: true,
-          permissionMode: "target_editors",
-          permissionCacheTtlSeconds: 600,
-          blankCellPolicy: {
-            manual: "confirm_then_continue",
-            scheduled: "abort_and_notify",
-            confirmationTimeoutMinutes: 10,
-          },
-          ...(plan.manualTrigger || {}),
-        },
-        schedule: {
-          crons: ["0 12 * * *", "0 0 * * *"],
-          ...(plan.schedule || {}),
-        },
-        ...plan,
-      })),
-    };
+    return { plans };
   }
 
   listPlans() {
     return clone(this.readConfig().plans);
-  }
-
-  listEnabledPlans() {
-    return this.listPlans().filter((plan) => plan.enabled !== false);
   }
 
   getPlan(planId) {
