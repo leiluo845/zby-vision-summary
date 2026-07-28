@@ -1,5 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const path = require("node:path");
 const {
   buildAggregatedSyncResult,
 } = require("../src/sync/core");
@@ -11,9 +12,27 @@ const {
   buildColumnRange,
   buildSingleCellWrites,
   buildSingleRowRangeUpdate,
+  createDwsEnvironment,
   extractCsvRows,
   getSheetReadRowLimit,
 } = require("../src/dingtalk/sheet-client");
+
+test("createDwsEnvironment supplies a stable HOME for headless services", () => {
+  const configDir = path.resolve("runtime", "dws-config");
+  const env = createDwsEnvironment(configDir, { PATH: "/usr/bin" });
+
+  assert.equal(env.DWS_CONFIG_DIR, configDir);
+  assert.equal(env.HOME, path.dirname(configDir));
+  assert.equal(env.PATH, "/usr/bin");
+});
+
+test("createDwsEnvironment preserves an explicitly configured HOME", () => {
+  const configDir = path.resolve("runtime", "dws-config");
+  const env = createDwsEnvironment(configDir, { HOME: "/root" });
+
+  assert.equal(env.HOME, "/root");
+  assert.equal(env.DWS_CONFIG_DIR, configDir);
+});
 
 function createPlan(overrides = {}) {
   return {

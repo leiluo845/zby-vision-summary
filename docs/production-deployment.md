@@ -12,6 +12,7 @@
 - 已安装 `dws` 命令行工具
 - `dws` 使用的账号可以读取全部分表并编辑固定总表
 - 服务进程能够访问持久化的 `DWS_CONFIG_DIR`
+- 部署主机已使用服务运行账号完成一次 `dws` 登录
 
 ## 环境变量
 
@@ -24,6 +25,20 @@ DINGTALK_PROVIDER=dws
 DWS_CONFIG_DIR=../dws-config
 RUN_HISTORY_LIMIT=20
 ```
+
+Linux 无界面服务器首次部署时，以实际运行服务的账号执行一次：
+
+```bash
+export HOME=/root
+export DWS_CONFIG_DIR=/opt/sheet-sync-bot/shared/dws-config
+mkdir -p "$DWS_CONFIG_DIR"
+dws auth login --device --format json
+dws auth status --format json
+```
+
+设备登录会输出授权网址和验证码。必须在浏览器中使用有权读取分表、编辑总表的钉钉账号完成确认。`DWS_CONFIG_DIR` 必须位于不会随新版本发布而删除的持久化目录，认证文件不得提交到 Git。
+
+应用调用 `dws` 时会继承服务进程的 `HOME`；如果服务没有提供 `HOME`，会自动使用 `DWS_CONFIG_DIR` 的上级目录，避免无界面进程无法确定用户目录。
 
 如果通过其他机器访问，应根据网络环境调整 `HOST`，并在反向代理层增加登录认证或 IP 白名单。
 

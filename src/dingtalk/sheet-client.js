@@ -740,10 +740,23 @@ function buildCompactRowsFromRawRows(rawRows, keyHeader, targetFields) {
   return rows;
 }
 
+function createDwsEnvironment(dwsConfigDir, baseEnv = process.env) {
+  const env = { ...baseEnv };
+
+  if (dwsConfigDir) {
+    env.DWS_CONFIG_DIR = dwsConfigDir;
+  }
+
+  if (!env.HOME) {
+    env.HOME = env.USERPROFILE
+      || (dwsConfigDir ? path.dirname(path.resolve(dwsConfigDir)) : process.cwd());
+  }
+
+  return env;
+}
+
 function execDws(args, dwsConfigDir) {
-  const env = dwsConfigDir
-    ? { ...process.env, DWS_CONFIG_DIR: dwsConfigDir }
-    : process.env;
+  const env = createDwsEnvironment(dwsConfigDir);
   const result = cp.spawnSync("dws", args, {
     env,
     encoding: "utf8",
@@ -1319,6 +1332,7 @@ module.exports = {
   buildColumnRange,
   buildSingleCellWrites,
   buildSingleRowRangeUpdate,
+  createDwsEnvironment,
   createSheetClient,
   extractCsvRows,
   getSheetReadRowLimit,
