@@ -465,7 +465,7 @@ test("DwsSheetClient retries transient read timeouts before splitting or failing
   client.readColumnValuesViaCsv = (_node, _sheetId, range) => {
     csvCalls.push(range);
     if (csvCalls.length === 1) {
-      throw new Error("HSFTimeOutException-HSF-0002 Timeout value is : 6000");
+      throw new Error('{"server_error_code":"stateServer.model.timeout","message":"timeout before step apply"}');
     }
 
     return ["SKU", "A"];
@@ -480,4 +480,132 @@ test("DwsSheetClient retries transient read timeouts before splitting or failing
   assert.deepEqual(values, ["SKU", "A"]);
   assert.deepEqual(csvCalls, ["B1:B2", "B1:B2"]);
   assert.deepEqual(rangeCalls, []);
+});
+
+test("DwsSheetClient combines contiguous configured columns and preserves blank cells", () => {
+  const client = new DwsSheetClient({
+    env: {
+      sheetReadChunkRows: 2,
+      sheetReadRetryCount: 1,
+      sheetReadRetryDelayMs: 0,
+    },
+  });
+  const job = {
+    id: "job-1",
+    label: "分表一",
+    source: { node: "source-node", sheet: "完成情况" },
+    keyColumn: { column: "B", header: "货号" },
+    fields: {
+      "齐色主附图完成时间": { column: "C", sourceHeader: "齐色主附图完成时间" },
+      "A+完成时间": { column: "D", sourceHeader: "A+完成时间" },
+      "视频完成时间": { column: "E", sourceHeader: "视频完成时间" },
+    },
+  };
+  const plan = createPlan({ jobs: [job] });
+  const csvCalls = [];
+
+  client.getSheetInfo = () => ({ nonEmptyRange: { lastRow: 3 } });
+  client.readColumnValuesWithFallback = () => {
+    throw new Error("contiguous columns should use one rectangular read per row chunk");
+  };
+  client.readRangeValuesViaCsv = (_node, _sheetId, range) => {
+    csvCalls.push(range);
+    return {
+      "B1:E2": [
+        ["货号", "齐色主附图完成时间", "A+完成时间", "视频完成时间"],
+        ["SKU-1", "", "/", "2026-07-01"],
+      ],
+      "B3:E3": [["SKU-2", "2026-07-02", "", ""]],
+    }[range];
+  };
+  client.readRangeValuesViaRange = (_node, _sheetId, range) => {
+    throw new Error(`unexpected range fallback: ${range}`);
+  };
+
+  const rows = client.buildSourceCompactRows(plan, job, { sheetId: "source-sheet" });
+
+  assert.deepEqual(csvCalls, ["B1:E2", "B3:E3"]);
+  assert.deepEqual(rows, [
+    ["货号", "齐色主附图完成时间", "A+完成时间", "视频完成时间"],
+    ["SKU-1", "", "/", "2026-07-01"],
+    ["SKU-2", "2026-07-02", "", ""],
+  ]);
+});
+
+test("DwsSheetClient shrinks rectangular chunks after state server timeouts", () => {
+  const client = new DwsSheetClient({
+    env: {
+      sheetReadChunkRows: 4,
+      sheetReadMinChunkRows: 1,
+      sheetReadRetryCount: 1,
+      sheetReadRetryDelayMs: 0,
+    },
+  });
+  const csvCalls = [];
+  const rangeCalls = [];
+
+  client.getSheetInfo = () => ({ nonEmptyRange: { lastRow: 4 } });
+  client.readRangeValuesViaCsv = (_node, _sheetId, range) => {
+    csvCalls.push(range);
+    if (range === "B1:E4") {
+      throw new Error("stateServer.model.timeout: timeout before step apply");
+    }
+    return {
+      "B1:E2": [["货号", "字段一", "字段二", "字段三"], ["SKU-1", "", "A", ""]],
+      "B3:E4": [["SKU-2", "B", "", "C"], ["", "", "", ""]],
+    }[range];
+  };
+  client.readRangeValuesViaRange = (_node, _sheetId, range) => {
+    rangeCalls.push(range);
+    throw new Error(`Empty sheet range response: ${range}`);
+  };
+
+  const rows = client.readRangeValuesWithFallback("node-1", "sheet-1", "B", "E");
+
+  assert.deepEqual(csvCalls, ["B1:E4", "B1:E2", "B3:E4"]);
+  assert.deepEqual(rangeCalls, ["B1:E4"]);
+  assert.deepEqual(rows, [
+    ["货号", "字段一", "字段二", "字段三"],
+    ["SKU-1", "", "A", ""],
+    ["SKU-2", "B", "", "C"],
+    ["", "", "", ""],
+  ]);
+});
+
+test("DwsSheetClient keeps per-column reads for non-contiguous and constant field mappings", () => {
+  const client = new DwsSheetClient({ env: {} });
+  const job = {
+    id: "job-1",
+    label: "分表一",
+    source: { node: "source-node", sheet: "完成情况" },
+    keyColumn: { column: "B", header: "货号" },
+    fields: {
+      "齐色主附图完成时间": { column: "D", sourceHeader: "齐色主附图完成时间" },
+      "A+完成时间": { constant: "/", sourceHeader: "A+完成时间" },
+      "视频完成时间": { column: "F", sourceHeader: "视频完成时间" },
+    },
+  };
+  const plan = createPlan({ jobs: [job] });
+  const columnCalls = [];
+  const values = {
+    B: ["货号", "SKU-1"],
+    D: ["齐色主附图完成时间", "2026-07-01"],
+    F: ["视频完成时间", ""],
+  };
+
+  client.readRangeValuesWithFallback = () => {
+    throw new Error("non-contiguous columns must not use a rectangular read");
+  };
+  client.readColumnValuesWithFallback = (_node, _sheetId, column) => {
+    columnCalls.push(column);
+    return values[column];
+  };
+
+  const rows = client.buildSourceCompactRows(plan, job, { sheetId: "source-sheet" });
+
+  assert.deepEqual(columnCalls, ["B", "D", "F"]);
+  assert.deepEqual(rows, [
+    ["货号", "齐色主附图完成时间", "A+完成时间", "视频完成时间"],
+    ["SKU-1", "2026-07-01", "", ""],
+  ]);
 });

@@ -52,6 +52,12 @@ function buildColumnRangeForRows(columnLetter, startRow, endRow) {
   return `${columnLetter}${safeStart}:${columnLetter}${safeEnd}`;
 }
 
+function buildRectangularRangeForRows(startColumn, endColumn, startRow, endRow) {
+  const safeStart = Math.max(1, Number(startRow || 1));
+  const safeEnd = Math.max(safeStart, Number(endRow || safeStart));
+  return `${startColumn}${safeStart}:${endColumn}${safeEnd}`;
+}
+
 function columnNameToIndex(columnLetter) {
   const text = String(columnLetter || "").trim().toUpperCase();
   let value = 0;
@@ -264,7 +270,7 @@ function splitChangedBlock(updatedTargetRows, block, targetColumns, targetFields
 
 function isTimeoutError(error) {
   const message = error instanceof Error ? `${error.message}\n${error.stack || ""}` : String(error || "");
-  return /HSFTimeOutException|already timeout|Timeout value is : 6000/i.test(message);
+  return /HSFTimeOutException|already timeout|Timeout value is : 6000|stateServer\.model\.timeout|timeout before step apply/i.test(message);
 }
 
 function isRetriableReadError(error) {
@@ -272,25 +278,29 @@ function isRetriableReadError(error) {
   return isTimeoutError(error) || /model\.operate\.block|empty sheet (csv|range) response/i.test(message);
 }
 
-function normalizeColumnValues(values, expectedRowCount) {
+function normalizeRangeValues(values, expectedRowCount, expectedColumnCount) {
+  const columnCount = Math.max(1, Number(expectedColumnCount || 1));
   const normalized = Array.isArray(values)
-    ? values.map((value) => (value == null ? "" : String(value)))
+    ? values.map((row) => {
+      const cells = Array.isArray(row) ? row : [];
+      return Array.from({ length: columnCount }, (_, index) => {
+        const value = cells[index];
+        return value == null ? "" : String(value);
+      });
+    })
     : [];
 
-  if (!Number.isFinite(Number(expectedRowCount)) || expectedRowCount <= 0) {
+  const rowCount = Math.max(0, Number(expectedRowCount || 0));
+  if (rowCount === 0) {
     return normalized;
   }
-
-  const size = Number(expectedRowCount);
-  if (normalized.length === size) {
-    return normalized;
+  if (normalized.length >= rowCount) {
+    return normalized.slice(0, rowCount);
   }
 
-  if (normalized.length > size) {
-    return normalized.slice(0, size);
-  }
-
-  return normalized.concat(Array.from({ length: size - normalized.length }, () => ""));
+  return normalized.concat(
+    Array.from({ length: rowCount - normalized.length }, () => Array.from({ length: columnCount }, () => "")),
+  );
 }
 
 function sleepSync(delayMs) {
@@ -953,7 +963,7 @@ class DwsSheetClient {
     return payload;
   }
 
-  readColumnValuesViaRange(node, sheetId, range, expectedRowCount) {
+  readRangeValuesViaRange(node, sheetId, range, expectedRowCount, expectedColumnCount) {
     const payload = execDws(
       [
         "sheet",
@@ -977,13 +987,10 @@ class DwsSheetClient {
       throw new Error(`Empty sheet range response: ${range}`);
     }
 
-    return normalizeColumnValues(
-      rows.map((row) => (Array.isArray(row) ? row[0] ?? "" : "")),
-      expectedRowCount,
-    );
+    return normalizeRangeValues(rows, expectedRowCount, expectedColumnCount);
   }
 
-  readColumnValuesViaCsv(node, sheetId, range, expectedRowCount) {
+  readRangeValuesViaCsv(node, sheetId, range, expectedRowCount, expectedColumnCount) {
     const payload = execDws(
       [
         "sheet",
@@ -1006,10 +1013,17 @@ class DwsSheetClient {
       throw new Error(`Empty sheet csv response: ${range}`);
     }
 
-    return normalizeColumnValues(
-      rows.map((row) => (Array.isArray(row) ? row[0] ?? "" : "")),
-      expectedRowCount,
-    );
+    return normalizeRangeValues(rows, expectedRowCount, expectedColumnCount);
+  }
+
+  readColumnValuesViaRange(node, sheetId, range, expectedRowCount) {
+    return this.readRangeValuesViaRange(node, sheetId, range, expectedRowCount, 1)
+      .map((row) => row[0]);
+  }
+
+  readColumnValuesViaCsv(node, sheetId, range, expectedRowCount) {
+    return this.readRangeValuesViaCsv(node, sheetId, range, expectedRowCount, 1)
+      .map((row) => row[0]);
   }
 
   readColumnValuesSegment(node, sheetId, columnLetter, startRow, endRow) {
@@ -1045,84 +1059,6 @@ class DwsSheetClient {
   }
 
   readColumnValues(node, sheetId, columnLetter) {
-    const sheetInfo = this.getSheetInfo(node, sheetId);
-    const range = buildColumnRange(columnLetter, getSheetReadRowLimit(sheetInfo));
-    const payload = execDws(
-      [
-        "sheet",
-        "range",
-        "read",
-        "--node",
-        node,
-        "--sheet-id",
-        sheetId,
-        "--range",
-        range,
-        "--value-render-option",
-        "formatted_value",
-        "--format",
-        "json",
-      ],
-      this.dwsConfigDir,
-    );
-    const rows = extractRangeValues(payload);
-    if (rows.length === 0) {
-      throw new Error(`读取列 ${columnLetter} 失败: ${JSON.stringify(payload)}`);
-    }
-
-    return rows.map((row) => (Array.isArray(row) ? row[0] ?? "" : ""));
-  }
-
-  readColumnValuesWithFallback(node, sheetId, columnLetter) {
-    const sheetInfo = this.getSheetInfo(node, sheetId);
-    const range = buildColumnRange(columnLetter, getSheetReadRowLimit(sheetInfo));
-    const rangePayload = execDws(
-      [
-        "sheet",
-        "range",
-        "read",
-        "--node",
-        node,
-        "--sheet-id",
-        sheetId,
-        "--range",
-        range,
-        "--value-render-option",
-        "formatted_value",
-        "--format",
-        "json",
-      ],
-      this.dwsConfigDir,
-    );
-    const rangeRows = extractRangeValues(rangePayload);
-    if (rangeRows.length > 0) {
-      return rangeRows.map((row) => (Array.isArray(row) ? row[0] ?? "" : ""));
-    }
-
-    const csvPayload = execDws(
-      [
-        "sheet",
-        "csv-get",
-        "--node",
-        node,
-        "--sheet-id",
-        sheetId,
-        "--range",
-        range,
-        "--format",
-        "json",
-      ],
-      this.dwsConfigDir,
-    );
-    const csvRows = extractCsvRows(csvPayload);
-    if (csvRows.length === 0) {
-      throw new Error(`读取列 ${columnLetter} 失败: ${JSON.stringify(rangePayload)}`);
-    }
-
-    return csvRows.map((row) => (Array.isArray(row) ? row[0] ?? "" : ""));
-  }
-
-  readColumnValues(node, sheetId, columnLetter) {
     return this.readColumnValuesWithFallback(node, sheetId, columnLetter);
   }
 
@@ -1140,19 +1076,121 @@ class DwsSheetClient {
     return values;
   }
 
+  readRangeValuesSegment(node, sheetId, startColumn, endColumn, startRow, endRow) {
+    const range = buildRectangularRangeForRows(startColumn, endColumn, startRow, endRow);
+    const rowCount = Math.max(1, endRow - startRow + 1);
+    const columnCount = columnNameToIndex(endColumn) - columnNameToIndex(startColumn) + 1;
+    let lastError = null;
+
+    try {
+      return this.runRetriableRead(() => this.readRangeValuesViaCsv(
+        node,
+        sheetId,
+        range,
+        rowCount,
+        columnCount,
+      ));
+    } catch (error) {
+      lastError = error;
+    }
+
+    try {
+      return this.runRetriableRead(() => this.readRangeValuesViaRange(
+        node,
+        sheetId,
+        range,
+        rowCount,
+        columnCount,
+      ));
+    } catch (error) {
+      lastError = error;
+    }
+
+    if (rowCount > this.getMinColumnReadChunkRows() && isRetriableReadError(lastError)) {
+      const middle = Math.floor((startRow + endRow) / 2);
+      if (middle >= endRow) {
+        throw lastError;
+      }
+
+      return [
+        ...this.readRangeValuesSegment(node, sheetId, startColumn, endColumn, startRow, middle),
+        ...this.readRangeValuesSegment(node, sheetId, startColumn, endColumn, middle + 1, endRow),
+      ];
+    }
+
+    throw lastError || new Error(`读取区域 ${range} 失败`);
+  }
+
+  readRangeValuesWithFallback(node, sheetId, startColumn, endColumn) {
+    const sheetInfo = this.getSheetInfo(node, sheetId);
+    const rowLimit = getSheetReadRowLimit(sheetInfo);
+    const chunkRows = this.getColumnReadChunkRows();
+    const rows = [];
+
+    for (let startRow = 1; startRow <= rowLimit; startRow += chunkRows) {
+      const endRow = Math.min(rowLimit, startRow + chunkRows - 1);
+      rows.push(...this.readRangeValuesSegment(node, sheetId, startColumn, endColumn, startRow, endRow));
+    }
+
+    return rows;
+  }
+
+  readConfiguredColumns(node, sheetId, columnLetters) {
+    const columns = [...new Set((columnLetters || []).map((columnLetter) => {
+      const normalized = String(columnLetter || "").trim().toUpperCase();
+      if (!/^[A-Z]+$/.test(normalized)) {
+        throw new Error(`表格读取配置缺少有效列号: ${columnLetter || "(空)"}`);
+      }
+      return normalized;
+    }))];
+    const valuesByColumn = new Map();
+    if (columns.length === 0) {
+      return valuesByColumn;
+    }
+
+    const columnIndices = columns.map(columnNameToIndex);
+    const minColumnIndex = Math.min(...columnIndices);
+    const maxColumnIndex = Math.max(...columnIndices);
+    const isContiguous = maxColumnIndex - minColumnIndex + 1 === columns.length;
+
+    if (!isContiguous) {
+      for (const column of columns) {
+        valuesByColumn.set(column, this.readColumnValuesWithFallback(node, sheetId, column));
+      }
+      return valuesByColumn;
+    }
+
+    const startColumn = excelColumnName(minColumnIndex);
+    const endColumn = excelColumnName(maxColumnIndex);
+    const rows = this.readRangeValuesWithFallback(node, sheetId, startColumn, endColumn);
+    for (const column of columns) {
+      const relativeIndex = columnNameToIndex(column) - minColumnIndex;
+      valuesByColumn.set(column, rows.map((row) => row[relativeIndex] ?? ""));
+    }
+    return valuesByColumn;
+  }
+
   buildTargetCompactRows(plan, resolvedSheet) {
     const targetFields = getPlanFields(plan);
     const keyHeader = plan.rules?.keyColumn || DEFAULT_KEY_COLUMN;
-    const keyColumn = plan.target.keyColumn?.column;
-    const keyValues = this.readColumnValuesWithFallback(plan.target.node, resolvedSheet.sheetId, keyColumn);
     const fieldSpecs = targetFields.map((field) => {
       const targetColumn = plan.target.columns?.[field];
       return {
         field,
+        column: targetColumn?.column,
         sourceHeader: targetColumn?.header || field,
-        values: this.readColumnValuesWithFallback(plan.target.node, resolvedSheet.sheetId, targetColumn.column),
       };
     });
+    const keyColumn = plan.target.keyColumn?.column;
+    const valuesByColumn = this.readConfiguredColumns(
+      plan.target.node,
+      resolvedSheet.sheetId,
+      [keyColumn, ...fieldSpecs.map((fieldSpec) => fieldSpec.column)],
+    );
+    const keyValues = valuesByColumn.get(String(keyColumn).trim().toUpperCase());
+    for (const fieldSpec of fieldSpecs) {
+      fieldSpec.values = valuesByColumn.get(String(fieldSpec.column).trim().toUpperCase());
+    }
 
     return buildCompactRows(keyValues, fieldSpecs, keyHeader, targetFields);
   }
@@ -1160,19 +1198,31 @@ class DwsSheetClient {
   buildSourceCompactRows(plan, job, resolvedSheet) {
     const targetFields = getPlanFields(plan);
     const keyHeader = plan.rules?.keyColumn || DEFAULT_KEY_COLUMN;
-    const keyColumn = job.keyColumn?.column;
-    const keyValues = this.readColumnValuesWithFallback(job.source.node, resolvedSheet.sheetId, keyColumn);
     const fieldSpecs = targetFields.map((field) => {
       const sourceField = getSourceFieldSpec(job, field);
       return {
         field,
         sourceHeader: sourceField.sourceHeader || field,
         constant: sourceField.constant,
-        values: sourceField.constant == null
-          ? this.readColumnValuesWithFallback(job.source.node, resolvedSheet.sheetId, sourceField.column)
-          : [],
+        column: sourceField.column,
+        values: [],
       };
     });
+    const keyColumn = job.keyColumn?.column;
+    const dynamicColumns = fieldSpecs
+      .filter((fieldSpec) => fieldSpec.constant == null)
+      .map((fieldSpec) => fieldSpec.column);
+    const valuesByColumn = this.readConfiguredColumns(
+      job.source.node,
+      resolvedSheet.sheetId,
+      [keyColumn, ...dynamicColumns],
+    );
+    const keyValues = valuesByColumn.get(String(keyColumn).trim().toUpperCase());
+    for (const fieldSpec of fieldSpecs) {
+      if (fieldSpec.constant == null) {
+        fieldSpec.values = valuesByColumn.get(String(fieldSpec.column).trim().toUpperCase());
+      }
+    }
 
     return buildCompactRows(keyValues, fieldSpecs, keyHeader, targetFields);
   }

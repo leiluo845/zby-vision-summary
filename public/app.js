@@ -8,6 +8,9 @@ const progressBar = document.getElementById("progressBar");
 const conflictDialog = document.getElementById("conflictDialog");
 const closeConflictButton = document.getElementById("closeConflictButton");
 const conflictContent = document.getElementById("conflictContent");
+const failureDialog = document.getElementById("failureDialog");
+const closeFailureButton = document.getElementById("closeFailureButton");
+const failureContent = document.getElementById("failureContent");
 
 let statusTimer = null;
 let statusRequestPending = false;
@@ -86,6 +89,15 @@ function getConflictDetails(run) {
   });
 }
 
+function getFailedJobDetails(run) {
+  return (run?.jobs || [])
+    .filter((job) => job.status === "failed")
+    .map((job) => ({
+      label: getSourceDisplayLabel(job),
+      errorMessage: String(job.errorMessage || "未返回具体失败原因"),
+    }));
+}
+
 function appendStatusLine(text, className = "") {
   const line = document.createElement("div");
   line.className = `status-line ${className}`.trim();
@@ -105,7 +117,7 @@ function renderConflictDetails(conflicts) {
   }
 
   const table = document.createElement("table");
-  table.className = "conflict-table";
+  table.className = "details-table";
   const tableHead = document.createElement("thead");
   const headerRow = document.createElement("tr");
   for (const heading of ["冲突货号", "所在分表"]) {
@@ -130,6 +142,42 @@ function renderConflictDetails(conflicts) {
   conflictContent.append(table);
 }
 
+function renderFailedJobDetails(failedJobs) {
+  failureContent.replaceChildren();
+  if (failedJobs.length === 0) {
+    const emptyMessage = document.createElement("p");
+    emptyMessage.className = "empty-message";
+    emptyMessage.textContent = "暂无同步失败分表。";
+    failureContent.append(emptyMessage);
+    return;
+  }
+
+  const table = document.createElement("table");
+  table.className = "details-table failure-table";
+  const tableHead = document.createElement("thead");
+  const headerRow = document.createElement("tr");
+  for (const heading of ["失败分表", "失败原因"]) {
+    const header = document.createElement("th");
+    header.scope = "col";
+    header.textContent = heading;
+    headerRow.append(header);
+  }
+  tableHead.append(headerRow);
+
+  const tableBody = document.createElement("tbody");
+  for (const failedJob of failedJobs) {
+    const row = document.createElement("tr");
+    const labelCell = document.createElement("td");
+    const errorCell = document.createElement("td");
+    labelCell.textContent = failedJob.label;
+    errorCell.textContent = failedJob.errorMessage;
+    row.append(labelCell, errorCell);
+    tableBody.append(row);
+  }
+  table.append(tableHead, tableBody);
+  failureContent.append(table);
+}
+
 function renderRun(run) {
   resultBox.replaceChildren();
   if (!run) {
@@ -137,22 +185,33 @@ function renderRun(run) {
     resultBox.setAttribute("aria-busy", "false");
     progressBar.hidden = true;
     renderConflictDetails([]);
+    renderFailedJobDetails([]);
     return;
   }
 
   const summary = run.summary || {};
-  const failedJobLabels = (run.jobs || [])
-    .filter((job) => job.status === "failed")
-    .map(getSourceDisplayLabel);
+  const failedJobs = getFailedJobDetails(run);
   const conflicts = getConflictDetails(run);
 
   appendStatusLine(`同步时间：${formatDateTime(run.finishedAt || run.startedAt)}；`);
   appendStatusLine(`${summary.successfulJobs ?? 0}/${summary.totalJobs ?? 10} 张分表同步成功；`);
-  appendStatusLine(`同步失败分表：${failedJobLabels.join("、") || "无"}；`);
+  const failureLine = appendStatusLine(
+    `同步失败分表：${failedJobs.map((job) => job.label).join("、") || "无"}；`,
+    "details-summary-line",
+  );
+  if (failedJobs.length > 0) {
+    const failureDetailsButton = document.createElement("button");
+    failureDetailsButton.className = "details-button";
+    failureDetailsButton.type = "button";
+    failureDetailsButton.textContent = "点击查看失败原因";
+    failureDetailsButton.setAttribute("aria-haspopup", "dialog");
+    failureDetailsButton.addEventListener("click", () => failureDialog.showModal());
+    failureLine.append(failureDetailsButton);
+  }
   appendStatusLine(`更新总表 ${summary.changedRows ?? 0} 行；`);
   appendStatusLine(`更新 ${summary.changedCells ?? 0} 个单元格；`);
   appendStatusLine(`${summary.missingInTargetKeys ?? 0} 个分表货号在总表中不存在，按规则未新增；`);
-  const conflictLine = appendStatusLine(`${summary.conflictedKeys ?? conflicts.length} 个冲突货号；`, "conflict-summary-line");
+  const conflictLine = appendStatusLine(`${summary.conflictedKeys ?? conflicts.length} 个冲突货号；`, "details-summary-line");
   if (conflicts.length > 0) {
     const detailsButton = document.createElement("button");
     detailsButton.className = "details-button";
@@ -164,6 +223,7 @@ function renderRun(run) {
   }
   appendStatusLine(`耗时约 ${formatDuration(run.durationMs)}；`);
   renderConflictDetails(conflicts);
+  renderFailedJobDetails(failedJobs);
   resultBox.setAttribute("aria-busy", "false");
   progressBar.hidden = true;
 }
@@ -175,6 +235,7 @@ function renderProgress(currentRun) {
   progressBar.value = progress;
   progressBar.hidden = false;
   renderConflictDetails([]);
+  renderFailedJobDetails([]);
 }
 
 function renderConfig(config) {
@@ -345,6 +406,16 @@ closeConflictButton.addEventListener("click", () => {
 conflictDialog.addEventListener("click", (event) => {
   if (event.target === conflictDialog) {
     conflictDialog.close();
+  }
+});
+
+closeFailureButton.addEventListener("click", () => {
+  failureDialog.close();
+});
+
+failureDialog.addEventListener("click", (event) => {
+  if (event.target === failureDialog) {
+    failureDialog.close();
   }
 });
 

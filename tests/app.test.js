@@ -117,9 +117,11 @@ test("web endpoints expose the manual sync plan and bot endpoints are absent", a
     assert.match(page, /id="syncButton"/);
     assert.match(page, /id="configDialog"/);
     assert.match(page, /id="conflictDialog"/);
+    assert.match(page, /id="failureDialog"/);
     assert.doesNotMatch(page, /预览同步|dryRunButton|测试按钮/);
     assert.match(clientScript, /sheet_08[\s\S]*分表⑦TK上架对接表（新）/);
     assert.match(clientScript, /同步失败分表/);
+    assert.match(clientScript, /点击查看失败原因/);
     assert.match(clientScript, /点击查看冲突货号/);
     assert.equal(botResponse.status, 404);
   } finally {
