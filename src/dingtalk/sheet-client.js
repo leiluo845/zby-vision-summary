@@ -269,13 +269,57 @@ function splitChangedBlock(updatedTargetRows, block, targetColumns, targetFields
 }
 
 function isTimeoutError(error) {
-  const message = error instanceof Error ? `${error.message}\n${error.stack || ""}` : String(error || "");
+  const message = getErrorText(error);
   return /HSFTimeOutException|already timeout|Timeout value is : 6000|stateServer\.model\.timeout|timeout before step apply/i.test(message);
 }
 
+function getErrorText(error) {
+  return error instanceof Error ? `${error.message}\n${error.stack || ""}` : String(error || "");
+}
+
+function getPrimaryErrorText(error) {
+  const message = error instanceof Error ? error.message : String(error || "");
+  try {
+    const payload = JSON.parse(message);
+    const details = payload?.error || payload;
+    if (details && typeof details === "object") {
+      return [details.message, details.reason, details.category, details.server_error_code]
+        .filter(Boolean)
+        .join("\n");
+    }
+  } catch {
+    // Plain CLI and operating-system errors are matched as-is.
+  }
+  return message;
+}
+
+function isPermanentReadError(error) {
+  const message = getPrimaryErrorText(error);
+  return /not[_ ]authenticated|not logged in|dws auth login|token data not found|token[^\n]*(?:expired|invalid)|unauthori[sz]ed|permission denied|access denied|forbidden|no permission|无权限|未登录|无权访问|工作表不存在|找不到工作表|sheet[^\n]*(?:not found|does not exist)|(?:node|sheet|range|argument|parameter)[^\n]*invalid|invalid[^\n]*(?:node|sheet|range|argument|parameter)|unknown command|unknown flag|missing required|required flag|表格读取配置缺少有效列号/i.test(message);
+}
+
 function isRetriableReadError(error) {
-  const message = error instanceof Error ? `${error.message}\n${error.stack || ""}` : String(error || "");
-  return isTimeoutError(error) || /model\.operate\.block|empty sheet (csv|range) response/i.test(message);
+  if (isPermanentReadError(error)) {
+    return false;
+  }
+
+  const message = getErrorText(error);
+  return isTimeoutError(error)
+    || /model\.operate\.block|empty (?:or invalid )?sheet (?:csv|range|info|list) response|returned (?:a )?null response|null response|\[MCP_TOOL_ERROR\]|server_error_code["':\s]+internalError|category["':\s]+internal|reason["':\s]+business_error|temporarily unavailable|service unavailable|bad gateway|gateway timeout|too many requests|rate.?limit|\b429\b|HTTP\s*5\d\d|\b(?:500|502|503|504)\b|ECONNRESET|ETIMEDOUT|EAI_AGAIN|socket hang up|network(?:ing)? error|fetch failed|connection (?:reset|closed|terminated)|unexpected EOF|dws 输出不是合法 JSON/i.test(message);
+}
+
+function shouldSplitReadFailures(errors) {
+  const failures = (errors || []).filter(Boolean);
+  return failures.length > 0
+    && !failures.some(isPermanentReadError)
+    && failures.some(isRetriableReadError);
+}
+
+function selectReadFailure(errors, fallbackMessage) {
+  const failures = (errors || []).filter(Boolean);
+  return failures.find(isPermanentReadError)
+    || failures[failures.length - 1]
+    || new Error(fallbackMessage);
 }
 
 function normalizeRangeValues(values, expectedRowCount, expectedColumnCount) {
@@ -876,7 +920,7 @@ class DwsSheetClient {
   }
 
   getReadRetryDelayMs() {
-    return Math.max(0, Number(this.env.sheetReadRetryDelayMs || 200));
+    return Math.max(0, Number(this.env.sheetReadRetryDelayMs ?? 500));
   }
 
   runRetriableRead(work) {
@@ -888,21 +932,23 @@ class DwsSheetClient {
   }
 
   listSheets(node) {
-    const payload = this.runRetriableRead(() => execDws(
-      ["sheet", "list", "--node", node, "--format", "json"],
-      this.dwsConfigDir,
-    ));
-    const result = pickFirstArray([
-      payload.result,
-      payload.sheets,
-      payload.items,
-      payload.data?.sheets,
-      payload.data?.items,
-    ]);
-    if (!result) {
-      throw new Error(`无法解析工作表列表: ${JSON.stringify(payload)}`);
-    }
-    return result;
+    return this.runRetriableRead(() => {
+      const payload = execDws(
+        ["sheet", "list", "--node", node, "--format", "json"],
+        this.dwsConfigDir,
+      );
+      const result = pickFirstArray([
+        payload.result,
+        payload.sheets,
+        payload.items,
+        payload.data?.sheets,
+        payload.data?.items,
+      ]);
+      if (!result) {
+        throw new Error(`Empty or invalid sheet list response: ${JSON.stringify(payload)}`);
+      }
+      return result;
+    });
   }
 
   resolveSheet(node, sheetInput, preferredSheetId = "") {
@@ -955,10 +1001,16 @@ class DwsSheetClient {
       return this.sheetInfoCache.get(cacheKey);
     }
 
-    const payload = this.runRetriableRead(() => execDws(
-      ["sheet", "info", "--node", node, "--sheet-id", sheetId, "--format", "json"],
-      this.dwsConfigDir,
-    ));
+    const payload = this.runRetriableRead(() => {
+      const result = execDws(
+        ["sheet", "info", "--node", node, "--sheet-id", sheetId, "--format", "json"],
+        this.dwsConfigDir,
+      );
+      if (!result || typeof result !== "object" || Object.keys(result).length === 0) {
+        throw new Error(`Empty or invalid sheet info response: ${sheetId}`);
+      }
+      return result;
+    });
     this.sheetInfoCache.set(cacheKey, payload);
     return payload;
   }
@@ -1029,24 +1081,31 @@ class DwsSheetClient {
   readColumnValuesSegment(node, sheetId, columnLetter, startRow, endRow) {
     const range = buildColumnRangeForRows(columnLetter, startRow, endRow);
     const rowCount = Math.max(1, endRow - startRow + 1);
-    let lastError = null;
+    const errors = [];
 
     try {
       return this.runRetriableRead(() => this.readColumnValuesViaCsv(node, sheetId, range, rowCount));
     } catch (error) {
-      lastError = error;
+      if (isPermanentReadError(error)) {
+        throw error;
+      }
+      errors.push(error);
     }
 
     try {
       return this.runRetriableRead(() => this.readColumnValuesViaRange(node, sheetId, range, rowCount));
     } catch (error) {
-      lastError = error;
+      if (isPermanentReadError(error)) {
+        throw error;
+      }
+      errors.push(error);
     }
 
-    if (rowCount > this.getMinColumnReadChunkRows() && isRetriableReadError(lastError)) {
+    const failure = selectReadFailure(errors, `读取列 ${columnLetter} 失败: ${range}`);
+    if (rowCount > this.getMinColumnReadChunkRows() && shouldSplitReadFailures(errors)) {
       const middle = Math.floor((startRow + endRow) / 2);
       if (middle >= endRow) {
-        throw lastError;
+        throw failure;
       }
 
       return [
@@ -1055,7 +1114,7 @@ class DwsSheetClient {
       ];
     }
 
-    throw lastError || new Error(`读取列 ${columnLetter} 失败: ${range}`);
+    throw failure;
   }
 
   readColumnValues(node, sheetId, columnLetter) {
@@ -1080,7 +1139,7 @@ class DwsSheetClient {
     const range = buildRectangularRangeForRows(startColumn, endColumn, startRow, endRow);
     const rowCount = Math.max(1, endRow - startRow + 1);
     const columnCount = columnNameToIndex(endColumn) - columnNameToIndex(startColumn) + 1;
-    let lastError = null;
+    const errors = [];
 
     try {
       return this.runRetriableRead(() => this.readRangeValuesViaCsv(
@@ -1091,7 +1150,10 @@ class DwsSheetClient {
         columnCount,
       ));
     } catch (error) {
-      lastError = error;
+      if (isPermanentReadError(error)) {
+        throw error;
+      }
+      errors.push(error);
     }
 
     try {
@@ -1103,13 +1165,17 @@ class DwsSheetClient {
         columnCount,
       ));
     } catch (error) {
-      lastError = error;
+      if (isPermanentReadError(error)) {
+        throw error;
+      }
+      errors.push(error);
     }
 
-    if (rowCount > this.getMinColumnReadChunkRows() && isRetriableReadError(lastError)) {
+    const failure = selectReadFailure(errors, `读取区域 ${range} 失败`);
+    if (rowCount > this.getMinColumnReadChunkRows() && shouldSplitReadFailures(errors)) {
       const middle = Math.floor((startRow + endRow) / 2);
       if (middle >= endRow) {
-        throw lastError;
+        throw failure;
       }
 
       return [
@@ -1118,7 +1184,7 @@ class DwsSheetClient {
       ];
     }
 
-    throw lastError || new Error(`读取区域 ${range} 失败`);
+    throw failure;
   }
 
   readRangeValuesWithFallback(node, sheetId, startColumn, endColumn) {
@@ -1162,7 +1228,19 @@ class DwsSheetClient {
 
     const startColumn = excelColumnName(minColumnIndex);
     const endColumn = excelColumnName(maxColumnIndex);
-    const rows = this.readRangeValuesWithFallback(node, sheetId, startColumn, endColumn);
+    let rows;
+    try {
+      rows = this.readRangeValuesWithFallback(node, sheetId, startColumn, endColumn);
+    } catch (error) {
+      if (!isRetriableReadError(error)) {
+        throw error;
+      }
+
+      for (const column of columns) {
+        valuesByColumn.set(column, this.readColumnValuesWithFallback(node, sheetId, column));
+      }
+      return valuesByColumn;
+    }
     for (const column of columns) {
       const relativeIndex = columnNameToIndex(column) - minColumnIndex;
       valuesByColumn.set(column, rows.map((row) => row[relativeIndex] ?? ""));

@@ -24,7 +24,13 @@ SYNC_PLANS_PATH=src/config/sync-plans.json
 DINGTALK_PROVIDER=dws
 DWS_CONFIG_DIR=../dws-config
 RUN_HISTORY_LIMIT=20
+SHEET_READ_CHUNK_ROWS=80
+SHEET_READ_MIN_CHUNK_ROWS=1
+SHEET_READ_RETRY_COUNT=3
+SHEET_READ_RETRY_DELAY_MS=500
 ```
+
+读取参数默认会对临时 DWS 错误重试 3 次，并以 500 毫秒为基础间隔退避。连续区域多次失败后，程序还会自动缩小分块并降级为逐列读取。未登录、权限不足、工作表不存在或配置无效不会进入重试。
 
 Linux 无界面服务器首次部署时，以实际运行服务的账号执行一次：
 

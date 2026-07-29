@@ -24,7 +24,7 @@ function loadEnv() {
     sheetReadChunkRows: readNumber("SHEET_READ_CHUNK_ROWS", 80),
     sheetReadMinChunkRows: readNumber("SHEET_READ_MIN_CHUNK_ROWS", 1),
     sheetReadRetryCount: readNumber("SHEET_READ_RETRY_COUNT", 3),
-    sheetReadRetryDelayMs: readNumber("SHEET_READ_RETRY_DELAY_MS", 200),
+    sheetReadRetryDelayMs: readNumber("SHEET_READ_RETRY_DELAY_MS", 500),
     mockSourceCsvPath: path.resolve(rootDir, process.env.MOCK_SOURCE_CSV || "runtime/source-test.csv"),
     mockTargetCsvPath: path.resolve(rootDir, process.env.MOCK_TARGET_CSV || "runtime/target-test.csv"),
     runHistoryLimit: readNumber("RUN_HISTORY_LIMIT", 20),

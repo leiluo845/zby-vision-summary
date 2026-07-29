@@ -482,6 +482,74 @@ test("DwsSheetClient retries transient read timeouts before splitting or failing
   assert.deepEqual(rangeCalls, []);
 });
 
+test("DwsSheetClient retries null, internal, rate-limit, and network read failures", () => {
+  const transientErrors = [
+    "[MCP_TOOL_ERROR] get_cell_infos returned a null response",
+    '{"category":"internal","message":"temporary sheet service failure"}',
+    '{"error":{"category":"api","hint":"The API returned a business-level error. Check required parameters and values.","message":"HSFTimeOutException-HSF-0002\\nerror message : Invalid call is removed because this request is already timeout.Timeout value is : 6000","reason":"business_error","server_error_code":"internalError","server_key":"sheet"}}',
+    "HTTP 503 Service Unavailable",
+    "read ECONNRESET",
+  ];
+
+  for (const errorMessage of transientErrors) {
+    const client = new DwsSheetClient({
+      env: {
+        sheetReadChunkRows: 2,
+        sheetReadRetryCount: 2,
+        sheetReadRetryDelayMs: 0,
+      },
+    });
+    let csvCallCount = 0;
+    let rangeCallCount = 0;
+
+    client.getSheetInfo = () => ({ nonEmptyRange: { lastRow: 2 } });
+    client.readColumnValuesViaCsv = () => {
+      csvCallCount += 1;
+      if (csvCallCount === 1) {
+        throw new Error(errorMessage);
+      }
+      return ["货号", "SKU-1"];
+    };
+    client.readColumnValuesViaRange = () => {
+      rangeCallCount += 1;
+      throw new Error("range fallback should not be needed after a successful retry");
+    };
+
+    assert.deepEqual(client.readColumnValues("node-1", "sheet-1", "B"), ["货号", "SKU-1"]);
+    assert.equal(csvCallCount, 2);
+    assert.equal(rangeCallCount, 0);
+  }
+});
+
+test("DwsSheetClient does not retry permanent authentication failures", () => {
+  const client = new DwsSheetClient({
+    env: {
+      sheetReadChunkRows: 2,
+      sheetReadRetryCount: 3,
+      sheetReadRetryDelayMs: 0,
+    },
+  });
+  let csvCallCount = 0;
+  let rangeCallCount = 0;
+
+  client.getSheetInfo = () => ({ nonEmptyRange: { lastRow: 2 } });
+  client.readColumnValuesViaCsv = () => {
+    csvCallCount += 1;
+    throw new Error('{"reason":"not_authenticated","message":"Not logged in, run dws auth login"}');
+  };
+  client.readColumnValuesViaRange = () => {
+    rangeCallCount += 1;
+    return ["货号", "SKU-1"];
+  };
+
+  assert.throws(
+    () => client.readColumnValues("node-1", "sheet-1", "B"),
+    /not_authenticated/,
+  );
+  assert.equal(csvCallCount, 1);
+  assert.equal(rangeCallCount, 0);
+});
+
 test("DwsSheetClient combines contiguous configured columns and preserves blank cells", () => {
   const client = new DwsSheetClient({
     env: {
@@ -532,7 +600,7 @@ test("DwsSheetClient combines contiguous configured columns and preserves blank 
   ]);
 });
 
-test("DwsSheetClient shrinks rectangular chunks after state server timeouts", () => {
+test("DwsSheetClient shrinks rectangular chunks after null cell responses", () => {
   const client = new DwsSheetClient({
     env: {
       sheetReadChunkRows: 4,
@@ -548,7 +616,7 @@ test("DwsSheetClient shrinks rectangular chunks after state server timeouts", ()
   client.readRangeValuesViaCsv = (_node, _sheetId, range) => {
     csvCalls.push(range);
     if (range === "B1:E4") {
-      throw new Error("stateServer.model.timeout: timeout before step apply");
+      throw new Error("[MCP_TOOL_ERROR] get_cell_infos returned a null response");
     }
     return {
       "B1:E2": [["货号", "字段一", "字段二", "字段三"], ["SKU-1", "", "A", ""]],
@@ -570,6 +638,64 @@ test("DwsSheetClient shrinks rectangular chunks after state server timeouts", ()
     ["SKU-2", "B", "", "C"],
     ["", "", "", ""],
   ]);
+});
+
+test("DwsSheetClient falls back to individual columns after a rectangular read is exhausted", () => {
+  const client = new DwsSheetClient({ env: {} });
+  const job = {
+    id: "job-1",
+    label: "分表一",
+    source: { node: "source-node", sheet: "完成情况" },
+    keyColumn: { column: "B", header: "货号" },
+    fields: {
+      "齐色主附图完成时间": { column: "C", sourceHeader: "齐色主附图完成时间" },
+      "A+完成时间": { column: "D", sourceHeader: "A+完成时间" },
+      "视频完成时间": { column: "E", sourceHeader: "视频完成时间" },
+    },
+  };
+  const plan = createPlan({ jobs: [job] });
+  const columnCalls = [];
+  const values = {
+    B: ["货号", "SKU-1"],
+    C: ["齐色主附图完成时间", ""],
+    D: ["A+完成时间", "/"],
+    E: ["视频完成时间", "2026-07-01"],
+  };
+
+  client.readRangeValuesWithFallback = () => {
+    throw new Error("[MCP_TOOL_ERROR] get_cell_infos returned a null response");
+  };
+  client.readColumnValuesWithFallback = (_node, _sheetId, column) => {
+    columnCalls.push(column);
+    return values[column];
+  };
+
+  const rows = client.buildSourceCompactRows(plan, job, { sheetId: "source-sheet" });
+
+  assert.deepEqual(columnCalls, ["B", "C", "D", "E"]);
+  assert.deepEqual(rows, [
+    ["货号", "齐色主附图完成时间", "A+完成时间", "视频完成时间"],
+    ["SKU-1", "", "/", "2026-07-01"],
+  ]);
+});
+
+test("DwsSheetClient does not use column fallback for permanent access failures", () => {
+  const client = new DwsSheetClient({ env: {} });
+  let columnCallCount = 0;
+
+  client.readRangeValuesWithFallback = () => {
+    throw new Error("permission denied: sheet is not accessible");
+  };
+  client.readColumnValuesWithFallback = () => {
+    columnCallCount += 1;
+    return [];
+  };
+
+  assert.throws(
+    () => client.readConfiguredColumns("node-1", "sheet-1", ["B", "C", "D", "E"]),
+    /permission denied/,
+  );
+  assert.equal(columnCallCount, 0);
 });
 
 test("DwsSheetClient keeps per-column reads for non-contiguous and constant field mappings", () => {
